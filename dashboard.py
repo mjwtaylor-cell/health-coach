@@ -11,13 +11,34 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import streamlit.components.v1 as components
+
 import config
 import insights
 import planner
 from db import init_db, query_df, upsert
 
-st.set_page_config(page_title="Health Coach", page_icon="🏃", layout="wide",
-                   initial_sidebar_state="collapsed")
+_ICON = "static/icon.png"
+st.set_page_config(page_title="Health Coach",
+                   page_icon=_ICON if os.path.exists(_ICON) else "🏃",
+                   layout="wide", initial_sidebar_state="collapsed")
+
+
+def _pwa_head() -> None:
+    """Inject home-screen icon + standalone meta into the parent <head> (Streamlit has no head API)."""
+    components.html("""
+    <script>
+    const d = window.parent.document;
+    const set = (sel, tag, attrs) => { let e = d.head.querySelector(sel);
+      if(!e){ e = d.createElement(tag); d.head.appendChild(e); }
+      Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k,v)); };
+    set("link[rel='apple-touch-icon']","link",{rel:"apple-touch-icon",href:"app/static/apple-touch-icon.png"});
+    set("meta[name='apple-mobile-web-app-capable']","meta",{name:"apple-mobile-web-app-capable",content:"yes"});
+    set("meta[name='apple-mobile-web-app-status-bar-style']","meta",{name:"apple-mobile-web-app-status-bar-style",content:"black-translucent"});
+    set("meta[name='apple-mobile-web-app-title']","meta",{name:"apple-mobile-web-app-title",content:"Health Coach"});
+    set("meta[name='theme-color']","meta",{name:"theme-color",content:"#0D0E12"});
+    </script>
+    """, height=0)
 
 ACCENT = "#FF6A3D"
 MUTED = "#8A8F99"
@@ -94,6 +115,9 @@ div[data-testid="stDataFrame"] { border-radius:14px; overflow:hidden; }
 """, unsafe_allow_html=True)
 
 
+_pwa_head()
+
+
 def q(sql: str) -> pd.DataFrame:
     return query_df(sql)
 
@@ -103,11 +127,31 @@ def latest(df: pd.DataFrame, col: str):
     return (s.iloc[-1] if len(s) else None), (round(s.tail(7).mean(), 1) if len(s) else None)
 
 
-def tile(label, value, unit="", sub="", color="#ECEDEF"):
+def series(df: pd.DataFrame, col: str, n: int = 14) -> list:
+    if df.empty or col not in df:
+        return []
+    return df[col].dropna().tail(n).tolist()
+
+
+def sparkline_svg(vals, color, w=132, h=34) -> str:
+    vals = [v for v in vals if v is not None]
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1
+    n = len(vals)
+    pts = " ".join(f"{i/(n-1)*w:.1f},{h-3-(v-lo)/rng*(h-6):.1f}" for i, v in enumerate(vals))
+    lx, ly = w, h - 3 - (vals[-1] - lo) / rng * (h - 6)
+    return (f"<svg width='100%' height='{h}' viewBox='0 0 {w} {h}' preserveAspectRatio='none' style='margin-top:8px;display:block'>"
+            f"<polyline points='{pts}' fill='none' stroke='{color}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>"
+            f"<circle cx='{lx:.1f}' cy='{ly:.1f}' r='2.8' fill='{color}'/></svg>")
+
+
+def tile(label, value, unit="", sub="", color="#ECEDEF", spark=""):
     val = "—" if value is None else value
     return (f"<div class='hc-tile'><div class='hc-label'>{label}</div>"
             f"<div class='hc-value' style='color:{color}'>{val}<span class='hc-unit'> {unit}</span></div>"
-            f"<div class='hc-sub'>{sub}</div></div>")
+            f"<div class='hc-sub'>{sub}</div>{spark}</div>")
 
 
 def score_color(v, good, ok):
@@ -147,6 +191,15 @@ r_now, r_avg = latest(rec, "score")
 h_now, h_avg = latest(slp, "hours")
 v_now, v_avg = latest(slp, "hrv_avg")
 rhr_now, rhr_avg = latest(slp, "hr_low")
+
+# this-week aggregates
+_monday = (dt.date.today() - dt.timedelta(days=dt.date.today().weekday())).isoformat()
+_agg = q(f"SELECT COALESCE(SUM(duration_min),0) mins, COALESCE(SUM(distance_km),0) km FROM workouts WHERE date>='{_monday}'")
+wk_mins = float(_agg["mins"].iloc[0]) if not _agg.empty else 0
+wk_km = float(_agg["km"].iloc[0]) if not _agg.empty else 0
+_wk_slp = slp[slp["date"] >= _monday] if not slp.empty else slp
+wk_sleep = round(_wk_slp["hours"].mean(), 1) if (not _wk_slp.empty and "hours" in _wk_slp) else None
+wk_runs = planner._runs_this_week()
 
 
 # ---------------- check-in modal ----------------
@@ -191,22 +244,40 @@ st.markdown(
     f"<div class='hc-why'>{plan['rationale']}</div></div>",
     unsafe_allow_html=True)
 
-# ---------------- quick stats ----------------
+# ---------------- this week ----------------
 st.markdown(
-    "<div class='hc-grid'>"
-    + tile("Readiness", None if r_now is None else round(r_now), "", f"7-day avg {r_avg}" if r_avg else "—", score_color(r_now, 80, 65))
-    + tile("Sleep", None if h_now is None else round(h_now, 1), "h", f"7-day avg {h_avg} h" if h_avg else "—", score_color(h_now, 7.5, 6.5))
-    + tile("HRV", None if v_now is None else round(v_now), "ms", f"7-day avg {round(v_avg) if v_avg else '—'} ms")
-    + tile("Resting HR", None if rhr_now is None else round(rhr_now), "bpm", f"7-day avg {round(rhr_avg) if rhr_avg else '—'} bpm")
+    "<div class='hc-sec'>This week</div><div class='hc-grid'>"
+    + tile("Runs", f"{wk_runs}/3", "", "target 3", ACCENT if wk_runs < 3 else "#3DD68C")
+    + tile("Training", round(wk_mins), "min", "logged")
+    + tile("Distance", round(wk_km, 1), "km", "run · ride · walk")
+    + tile("Avg sleep", wk_sleep, "h", "this week", score_color(wk_sleep, 7.5, 6.5))
+    + "</div>", unsafe_allow_html=True)
+
+# ---------------- recovery snapshot (now, with sparklines) ----------------
+st.markdown(
+    "<div class='hc-sec'>Recovery</div><div class='hc-grid'>"
+    + tile("Readiness", None if r_now is None else round(r_now), "", f"7-day avg {r_avg}" if r_avg else "—",
+           score_color(r_now, 80, 65), sparkline_svg(series(rec, "score"), score_color(r_now, 80, 65)))
+    + tile("Sleep", None if h_now is None else round(h_now, 1), "h", f"7-day avg {h_avg} h" if h_avg else "—",
+           score_color(h_now, 7.5, 6.5), sparkline_svg(series(slp, "hours"), score_color(h_now, 7.5, 6.5)))
+    + tile("HRV", None if v_now is None else round(v_now), "ms", f"7-day avg {round(v_avg) if v_avg else '—'} ms",
+           "#4AA8FF", sparkline_svg(series(slp, "hrv_avg"), "#4AA8FF"))
+    + tile("Resting HR", None if rhr_now is None else round(rhr_now), "bpm", f"7-day avg {round(rhr_avg) if rhr_avg else '—'} bpm",
+           "#3DD68C", sparkline_svg(series(slp, "hr_low"), "#3DD68C"))
     + "</div>", unsafe_allow_html=True)
 
 # ---------------- recovery ----------------
 if not rec.empty:
-    st.markdown("<div class='hc-sec'>Recovery</div>", unsafe_allow_html=True)
+    st.markdown("<div class='hc-sec'>Trends</div>", unsafe_allow_html=True)
     a, b = st.columns(2)
-    fig = line(rec, "date", "score"); fig.update_yaxes(range=[0, 100])
-    a.markdown("<div class='hc-label'>Readiness</div>", unsafe_allow_html=True)
-    a.plotly_chart(fig, use_container_width=True, config=PLOT_CFG)
+    rfig = go.Figure(go.Scatter(x=rec["date"], y=rec["score"], mode="lines",
+                                line=dict(color="#ECEDEF", width=2.4, shape="spline")))
+    rfig.add_hrect(y0=0, y1=65, fillcolor="#FF5A4D", opacity=0.10, line_width=0, layer="below")
+    rfig.add_hrect(y0=65, y1=80, fillcolor="#FFA336", opacity=0.10, line_width=0, layer="below")
+    rfig.add_hrect(y0=80, y1=100, fillcolor="#3DD68C", opacity=0.12, line_width=0, layer="below")
+    style_fig(rfig); rfig.update_yaxes(range=[0, 100])
+    a.markdown("<div class='hc-label'>Readiness · zones</div>", unsafe_allow_html=True)
+    a.plotly_chart(rfig, use_container_width=True, config=PLOT_CFG)
     if not slp.empty:
         b.markdown("<div class='hc-label'>Sleep (hours)</div>", unsafe_allow_html=True)
         bar = go.Figure(go.Bar(x=slp["date"], y=slp["hours"], marker_color=ACCENT, marker_line_width=0))
