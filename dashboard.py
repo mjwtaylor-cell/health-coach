@@ -313,3 +313,10 @@ for i in range(0, len(cards), 2):
             f"<div class='t' style='color:{cc}'>{card['title']}</div>"
             f"<h4>{card['headline']}</h4><p>{card['detail']}</p></div>",
             unsafe_allow_html=True)
+
+# ---------------- diagnostic footer ----------------
+import db as _dbmod  # noqa: E402
+_src = "Turso ☁" if _dbmod._use_turso() else "local (ephemeral)"
+_rn = q("SELECT COUNT(*) c FROM readiness")
+_cnt = int(_rn["c"].iloc[0]) if not _rn.empty else 0
+st.caption(f"data source: {_src} · {_cnt} readiness rows · {len(wk) if not wk.empty else 0} recent workouts")

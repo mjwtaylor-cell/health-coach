@@ -12,8 +12,12 @@ from typing import Any, Iterable
 import config
 from config import DB_PATH
 
-_USE_TURSO = bool(config.TURSO_DATABASE_URL)
 _turso_conn = None  # reused across Streamlit reruns
+
+
+def _use_turso() -> bool:
+    """Checked LIVE (not at import) — Streamlit Cloud may load secrets after import."""
+    return bool(config.secret("TURSO_DATABASE_URL"))
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS sleep (
@@ -55,13 +59,13 @@ def _turso():
     if _turso_conn is None:
         import libsql_client
         # libsql:// defaults to a websocket transport some endpoints reject; force https.
-        url = config.TURSO_DATABASE_URL.replace("libsql://", "https://", 1)
-        _turso_conn = libsql_client.create_client_sync(url=url, auth_token=config.TURSO_AUTH_TOKEN)
+        url = config.secret("TURSO_DATABASE_URL").replace("libsql://", "https://", 1)
+        _turso_conn = libsql_client.create_client_sync(url=url, auth_token=config.secret("TURSO_AUTH_TOKEN"))
     return _turso_conn
 
 
 def init_db() -> None:
-    if _USE_TURSO:
+    if _use_turso():
         _turso().batch(list(SCHEMA))
         return
     conn = sqlite3.connect(DB_PATH)
@@ -72,7 +76,7 @@ def init_db() -> None:
 
 
 def _fetch(sql: str, params: tuple = ()):
-    if _USE_TURSO:
+    if _use_turso():
         rs = _turso().execute(sql, list(params))
         return list(rs.columns), [tuple(r) for r in rs.rows]
     conn = sqlite3.connect(DB_PATH)
@@ -102,7 +106,7 @@ def upsert(table: str, rows: Iterable[dict[str, Any]]) -> int:
     placeholders = ", ".join("?" for _ in cols)
     sql = f"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
     data = [[r.get(c) for c in cols] for r in rows]
-    if _USE_TURSO:
+    if _use_turso():
         _turso().batch([(sql, row) for row in data])  # atomic batch
         return len(rows)
     conn = sqlite3.connect(DB_PATH)
@@ -114,4 +118,4 @@ def upsert(table: str, rows: Iterable[dict[str, Any]]) -> int:
 
 if __name__ == "__main__":
     init_db()
-    print(f"Initialized DB ({'Turso' if _USE_TURSO else DB_PATH})")
+    print(f"Initialized DB ({'Turso' if _use_turso() else DB_PATH})")
