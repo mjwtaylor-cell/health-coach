@@ -49,38 +49,37 @@ SCHEMA = [
 ]
 
 
-def _connect():
-    """Return a live connection. Turso connection is a reused singleton; SQLite is per-call."""
+def _turso():
+    """Reused libsql-client (pure-Python, HTTP transport) for the hosted DB."""
     global _turso_conn
-    if _USE_TURSO:
-        if _turso_conn is None:
-            import libsql_experimental as libsql
-            _turso_conn = libsql.connect(
-                database=config.TURSO_DATABASE_URL, auth_token=config.TURSO_AUTH_TOKEN
-            )
-        return _turso_conn
-    return sqlite3.connect(DB_PATH)
-
-
-def _close(conn) -> None:
-    if not _USE_TURSO:
-        conn.close()
+    if _turso_conn is None:
+        import libsql_client
+        # libsql:// defaults to a websocket transport some endpoints reject; force https.
+        url = config.TURSO_DATABASE_URL.replace("libsql://", "https://", 1)
+        _turso_conn = libsql_client.create_client_sync(url=url, auth_token=config.TURSO_AUTH_TOKEN)
+    return _turso_conn
 
 
 def init_db() -> None:
-    conn = _connect()
+    if _USE_TURSO:
+        _turso().batch(list(SCHEMA))
+        return
+    conn = sqlite3.connect(DB_PATH)
     for stmt in SCHEMA:
         conn.execute(stmt)
     conn.commit()
-    _close(conn)
+    conn.close()
 
 
 def _fetch(sql: str, params: tuple = ()):
-    conn = _connect()
+    if _USE_TURSO:
+        rs = _turso().execute(sql, list(params))
+        return list(rs.columns), [tuple(r) for r in rs.rows]
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.execute(sql, params)
     cols = [d[0] for d in cur.description] if cur.description else []
     rows = cur.fetchall()
-    _close(conn)
+    conn.close()
     return cols, rows
 
 
@@ -103,14 +102,13 @@ def upsert(table: str, rows: Iterable[dict[str, Any]]) -> int:
     placeholders = ", ".join("?" for _ in cols)
     sql = f"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
     data = [[r.get(c) for c in cols] for r in rows]
-    conn = _connect()
     if _USE_TURSO:
-        for row in data:
-            conn.execute(sql, row)
-    else:
-        conn.executemany(sql, data)
+        _turso().batch([(sql, row) for row in data])  # atomic batch
+        return len(rows)
+    conn = sqlite3.connect(DB_PATH)
+    conn.executemany(sql, data)
     conn.commit()
-    _close(conn)
+    conn.close()
     return len(rows)
 
 

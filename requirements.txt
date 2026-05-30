@@ -3,4 +3,4 @@ pandas>=2.2
 plotly>=5.24
 requests>=2.32
 python-dotenv>=1.0
-libsql-experimental>=0.0.30   # only used in the cloud (Turso); harmless locally
+libsql-client>=0.3            # hosted SQLite (Turso) — pure Python, used when TURSO_* is set
