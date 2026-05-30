@@ -1,0 +1,25 @@
+# Fly.io config. Change `app` to your own unique name before first deploy
+# (or let `fly launch` set it). See DEPLOY.md for the full walkthrough.
+app = "CHANGEME-health-coach"
+primary_region = "iad"   # pick one near you: https://fly.io/docs/reference/regions/
+
+[build]
+
+[env]
+  HC_DATA_DIR = "/data"
+  AUTO_REFRESH = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # sleeps when idle to save cost; wakes on open (~few s cold start)
+
+[[mounts]]
+  source = "health_data"
+  destination = "/data"      # SQLite lives here, survives restarts
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
