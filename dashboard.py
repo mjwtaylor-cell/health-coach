@@ -230,93 +230,118 @@ hb.write("")
 if hb.button("＋ Check-in", use_container_width=True):
     checkin_dialog()
 
-# ---------------- today hero ----------------
-c = plan["training_call"]
-badge_c = CALL.get(c, ACCENT)
-fuel = (f"&nbsp;·&nbsp; <b style='color:{ACCENT}'>{plan['calorie_target']:.0f}</b> kcal &nbsp; "
-        f"<b style='color:{ACCENT}'>{plan['protein_target']:.0f}</b> g protein") if plan["calorie_target"] else ""
-st.markdown(
-    f"<div class='hc-hero'>"
-    f"<span class='hc-label'>Today's call</span> {fuel}"
-    f"<div style='margin:8px 0'><span class='hc-badge' style='background:{badge_c}1f;color:{badge_c};border:1px solid {badge_c}55'>"
-    f"● {c.upper()}</span></div>"
-    f"<div class='hc-session'>{plan['session']}</div>"
-    f"<div class='hc-why'>{plan['rationale']}</div></div>",
-    unsafe_allow_html=True)
+# tab-bar styling — sticky segmented control
+st.markdown("""<style>
+.stTabs [data-baseweb="tab-list"]{gap:6px;background:#16181F;border:1px solid #23262F;border-radius:14px;
+  padding:5px;position:sticky;top:6px;z-index:50;}
+.stTabs [data-baseweb="tab"]{flex:1;justify-content:center;border-radius:10px;padding:9px 4px;color:#8A8F99;}
+.stTabs [data-baseweb="tab"] p{font-size:.92rem!important;font-weight:700!important;margin:0;}
+.stTabs [aria-selected="true"]{background:#FF6A3D!important;}
+.stTabs [aria-selected="true"] p{color:#0D0E12!important;}
+.stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"]{display:none!important;}
+.stTabs [data-baseweb="tab-panel"]{padding-top:16px;}
+</style>""", unsafe_allow_html=True)
 
-# ---------------- this week ----------------
-st.markdown(
-    "<div class='hc-sec'>This week</div><div class='hc-grid'>"
-    + tile("Runs", f"{wk_runs}/3", "", "target 3", ACCENT if wk_runs < 3 else "#3DD68C")
-    + tile("Training", round(wk_mins), "min", "logged")
-    + tile("Distance", round(wk_km, 1), "km", "run · ride · walk")
-    + tile("Avg sleep", wk_sleep, "h", "this week", score_color(wk_sleep, 7.5, 6.5))
-    + "</div>", unsafe_allow_html=True)
-
-# ---------------- recovery snapshot (now, with sparklines) ----------------
-st.markdown(
-    "<div class='hc-sec'>Recovery</div><div class='hc-grid'>"
-    + tile("Readiness", None if r_now is None else round(r_now), "", f"7-day avg {r_avg}" if r_avg else "—",
-           score_color(r_now, 80, 65), sparkline_svg(series(rec, "score"), score_color(r_now, 80, 65)))
-    + tile("Sleep", None if h_now is None else round(h_now, 1), "h", f"7-day avg {h_avg} h" if h_avg else "—",
-           score_color(h_now, 7.5, 6.5), sparkline_svg(series(slp, "hours"), score_color(h_now, 7.5, 6.5)))
-    + tile("HRV", None if v_now is None else round(v_now), "ms", f"7-day avg {round(v_avg) if v_avg else '—'} ms",
-           "#4AA8FF", sparkline_svg(series(slp, "hrv_avg"), "#4AA8FF"))
-    + tile("Resting HR", None if rhr_now is None else round(rhr_now), "bpm", f"7-day avg {round(rhr_avg) if rhr_avg else '—'} bpm",
-           "#3DD68C", sparkline_svg(series(slp, "hr_low"), "#3DD68C"))
-    + "</div>", unsafe_allow_html=True)
-
-# ---------------- recovery ----------------
-if not rec.empty:
-    st.markdown("<div class='hc-sec'>Trends</div>", unsafe_allow_html=True)
-    a, b = st.columns(2)
-    rfig = go.Figure(go.Scatter(x=rec["date"], y=rec["score"], mode="lines",
-                                line=dict(color="#ECEDEF", width=2.4, shape="spline")))
-    rfig.add_hrect(y0=0, y1=65, fillcolor="#FF5A4D", opacity=0.10, line_width=0, layer="below")
-    rfig.add_hrect(y0=65, y1=80, fillcolor="#FFA336", opacity=0.10, line_width=0, layer="below")
-    rfig.add_hrect(y0=80, y1=100, fillcolor="#3DD68C", opacity=0.12, line_width=0, layer="below")
-    style_fig(rfig); rfig.update_yaxes(range=[0, 100])
-    a.markdown("<div class='hc-label'>Readiness · zones</div>", unsafe_allow_html=True)
-    a.plotly_chart(rfig, use_container_width=True, config=PLOT_CFG)
-    if not slp.empty:
-        b.markdown("<div class='hc-label'>Sleep (hours)</div>", unsafe_allow_html=True)
-        bar = go.Figure(go.Bar(x=slp["date"], y=slp["hours"], marker_color=ACCENT, marker_line_width=0))
-        b.plotly_chart(style_fig(bar), use_container_width=True, config=PLOT_CFG)
-        a2, b2 = st.columns(2)
-        a2.markdown("<div class='hc-label'>HRV (ms)</div>", unsafe_allow_html=True)
-        a2.plotly_chart(line(slp, "date", "hrv_avg", "#4AA8FF", fill=False), use_container_width=True, config=PLOT_CFG)
-        b2.markdown("<div class='hc-label'>Resting HR (bpm)</div>", unsafe_allow_html=True)
-        b2.plotly_chart(line(slp, "date", "hr_low", "#3DD68C", fill=False), use_container_width=True, config=PLOT_CFG)
-
-# ---------------- training load ----------------
-wk = q("SELECT date, type, source, duration_min, distance_km, hr_avg FROM workouts ORDER BY date DESC LIMIT 20")
-st.markdown("<div class='hc-sec'>Training load</div>", unsafe_allow_html=True)
-runs_done = planner._runs_this_week()
-st.markdown("<div class='hc-grid'>"
-            + tile("Runs this week", f"{runs_done} / 3", "", "target 3", ACCENT if runs_done < 3 else "#3DD68C")
-            + (tile("Last 20 sessions", len(wk), "", "across all sources") if not wk.empty else "")
-            + "</div>", unsafe_allow_html=True)
-if not wk.empty:
-    st.dataframe(wk, use_container_width=True, hide_index=True,
-                 column_config={"duration_min": "min", "distance_km": "km", "hr_avg": "avg HR"})
-
-# ---------------- insights ----------------
-st.markdown("<div class='hc-sec'>Weekly insights</div>", unsafe_allow_html=True)
+wk = q("SELECT date, type, source, duration_min, distance_km, hr_avg FROM workouts ORDER BY date DESC LIMIT 25")
 tone_c = {"good": "#3DD68C", "warn": "#FFA336", "info": "#4AA8FF"}
-cards = insights.compute()
-for i in range(0, len(cards), 2):
-    cols = st.columns(2)
-    for col, card in zip(cols, cards[i:i + 2]):
-        cc = tone_c.get(card["tone"], MUTED)
-        col.markdown(
-            f"<div class='hc-ins' style='border-left-color:{cc}'>"
-            f"<div class='t' style='color:{cc}'>{card['title']}</div>"
-            f"<h4>{card['headline']}</h4><p>{card['detail']}</p></div>",
-            unsafe_allow_html=True)
 
-# ---------------- diagnostic footer ----------------
-import db as _dbmod  # noqa: E402
-_src = "Turso ☁" if _dbmod._use_turso() else "local (ephemeral)"
-_rn = q("SELECT COUNT(*) c FROM readiness")
-_cnt = int(_rn["c"].iloc[0]) if not _rn.empty else 0
-st.caption(f"data source: {_src} · {_cnt} readiness rows · {len(wk) if not wk.empty else 0} recent workouts")
+# metric registry for the Recovery drill-down
+METRICS = {
+    "Readiness": dict(df=rec, col="score", unit="", color=score_color(r_now, 80, 65), bands=True, dec=0),
+    "Sleep":     dict(df=slp, col="hours", unit="h", color=score_color(h_now, 7.5, 6.5), bands=False, dec=1),
+    "HRV":       dict(df=slp, col="hrv_avg", unit="ms", color="#4AA8FF", bands=False, dec=0),
+    "Resting HR": dict(df=slp, col="hr_low", unit="bpm", color="#3DD68C", bands=False, dec=0),
+}
+
+t_today, t_rec, t_train, t_ins = st.tabs(["Today", "Recovery", "Training", "Insights"])
+
+# ============ TODAY ============
+with t_today:
+    c = plan["training_call"]
+    badge_c = CALL.get(c, ACCENT)
+    fuel = (f"&nbsp;·&nbsp; <b style='color:{ACCENT}'>{plan['calorie_target']:.0f}</b> kcal &nbsp; "
+            f"<b style='color:{ACCENT}'>{plan['protein_target']:.0f}</b> g protein") if plan["calorie_target"] else ""
+    st.markdown(
+        f"<div class='hc-hero'><span class='hc-label'>Today's call</span> {fuel}"
+        f"<div style='margin:8px 0'><span class='hc-badge' style='background:{badge_c}1f;color:{badge_c};border:1px solid {badge_c}55'>"
+        f"● {c.upper()}</span></div><div class='hc-session'>{plan['session']}</div>"
+        f"<div class='hc-why'>{plan['rationale']}</div></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='hc-sec'>This week</div><div class='hc-grid'>"
+        + tile("Runs", f"{wk_runs}/3", "", "target 3", ACCENT if wk_runs < 3 else "#3DD68C")
+        + tile("Training", round(wk_mins), "min", "logged")
+        + tile("Distance", round(wk_km, 1), "km", "run · ride · walk")
+        + tile("Avg sleep", wk_sleep, "h", "this week", score_color(wk_sleep, 7.5, 6.5))
+        + "</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='hc-sec'>Recovery</div><div class='hc-grid'>"
+        + tile("Readiness", None if r_now is None else round(r_now), "", f"avg {r_avg}" if r_avg else "—",
+               score_color(r_now, 80, 65), sparkline_svg(series(rec, "score"), score_color(r_now, 80, 65)))
+        + tile("Sleep", None if h_now is None else round(h_now, 1), "h", f"avg {h_avg} h" if h_avg else "—",
+               score_color(h_now, 7.5, 6.5), sparkline_svg(series(slp, "hours"), score_color(h_now, 7.5, 6.5)))
+        + tile("HRV", None if v_now is None else round(v_now), "ms", f"avg {round(v_avg) if v_avg else '—'} ms",
+               "#4AA8FF", sparkline_svg(series(slp, "hrv_avg"), "#4AA8FF"))
+        + tile("Resting HR", None if rhr_now is None else round(rhr_now), "bpm", f"avg {round(rhr_avg) if rhr_avg else '—'}",
+               "#3DD68C", sparkline_svg(series(slp, "hr_low"), "#3DD68C"))
+        + "</div><div style='color:#6f7681;font-size:.8rem;margin-top:6px'>↳ open the Recovery tab for detail</div>",
+        unsafe_allow_html=True)
+
+# ============ RECOVERY ============
+with t_rec:
+    sel = st.segmented_control("metric", list(METRICS), default="Readiness", label_visibility="collapsed")
+    sel = sel or "Readiness"
+    m = METRICS[sel]
+    s = m["df"][m["col"]].dropna() if (not m["df"].empty and m["col"] in m["df"]) else pd.Series(dtype=float)
+    if len(s):
+        fmt = (lambda x: f"{x:.0f}") if m["dec"] == 0 else (lambda x: f"{x:.1f}")
+        st.markdown("<div class='hc-grid'>"
+                    + tile("Now", fmt(s.iloc[-1]), m["unit"], "latest", m["color"])
+                    + tile("7-day", fmt(s.tail(7).mean()), m["unit"], "average")
+                    + tile("30-day", fmt(s.tail(30).mean()), m["unit"], "average")
+                    + tile("Range", f"{fmt(s.min())}–{fmt(s.max())}", m["unit"], "min–max")
+                    + "</div>", unsafe_allow_html=True)
+        d = m["df"]
+        if m["bands"]:
+            fig = go.Figure(go.Scatter(x=d["date"], y=d[m["col"]], mode="lines",
+                                       line=dict(color="#ECEDEF", width=2.4, shape="spline")))
+            for y0, y1, cb in [(0, 65, "#FF5A4D"), (65, 80, "#FFA336"), (80, 100, "#3DD68C")]:
+                fig.add_hrect(y0=y0, y1=y1, fillcolor=cb, opacity=0.11, line_width=0, layer="below")
+            style_fig(fig, height=300); fig.update_yaxes(range=[0, 100])
+        else:
+            fig = line(d, "date", m["col"], m["color"], fill=True, height=300)
+        st.plotly_chart(fig, use_container_width=True, config=PLOT_CFG)
+    else:
+        st.caption("No data yet for this metric.")
+
+# ============ TRAINING ============
+with t_train:
+    st.markdown("<div class='hc-grid'>"
+                + tile("Runs", f"{wk_runs}/3", "", "this week", ACCENT if wk_runs < 3 else "#3DD68C")
+                + tile("Training", round(wk_mins), "min", "this week")
+                + tile("Distance", round(wk_km, 1), "km", "this week")
+                + "</div>", unsafe_allow_html=True)
+    if not wk.empty:
+        bydate = wk.copy()
+        bydate["d"] = pd.to_datetime(bydate["date"]).dt.strftime("%b %d")
+        load = bydate.groupby("d", sort=False)["duration_min"].sum().iloc[::-1]
+        st.markdown("<div class='hc-label'>Minutes per day</div>", unsafe_allow_html=True)
+        st.plotly_chart(style_fig(go.Figure(go.Bar(x=load.index, y=load.values, marker_color=ACCENT, marker_line_width=0))),
+                        use_container_width=True, config=PLOT_CFG)
+        st.markdown("<div class='hc-label'>Recent sessions</div>", unsafe_allow_html=True)
+        st.dataframe(wk.drop(columns=["source"]), use_container_width=True, hide_index=True,
+                     column_config={"duration_min": "min", "distance_km": "km", "hr_avg": "avg HR"})
+    else:
+        st.caption("No workouts logged yet.")
+
+# ============ INSIGHTS ============
+with t_ins:
+    cards = insights.compute()
+    for i in range(0, len(cards), 2):
+        cols = st.columns(2)
+        for col, card in zip(cols, cards[i:i + 2]):
+            cc = tone_c.get(card["tone"], MUTED)
+            col.markdown(
+                f"<div class='hc-ins' style='border-left-color:{cc}'>"
+                f"<div class='t' style='color:{cc}'>{card['title']}</div>"
+                f"<h4>{card['headline']}</h4><p>{card['detail']}</p></div>",
+                unsafe_allow_html=True)
