@@ -13,6 +13,7 @@ import streamlit as st
 
 import streamlit.components.v1 as components
 
+import coach
 import config
 import insights
 import planner
@@ -266,6 +267,28 @@ with t_today:
         f"<div style='margin:8px 0'><span class='hc-badge' style='background:{badge_c}1f;color:{badge_c};border:1px solid {badge_c}55'>"
         f"● {c.upper()}</span></div><div class='hc-session'>{plan['session']}</div>"
         f"<div class='hc-why'>{plan['rationale']}</div></div>", unsafe_allow_html=True)
+
+    # ----- AI coach -----
+    st.markdown("<div class='hc-sec'>🧠 Coach's notes</div>", unsafe_allow_html=True)
+    if coach.available():
+        @st.cache_data(ttl=12 * 3600, show_spinner="Coach is reviewing your data…")
+        def _coach_tips(day: str):
+            return coach.get_today()
+        tips = _coach_tips(dt.date.today().isoformat())
+        if tips:
+            cat_c = {"recovery": "#4AA8FF", "training": ACCENT, "nutrition": "#3DD68C",
+                     "sleep": "#9B8CFF", "trend": "#FFA336", "mindset": "#F4F5F7"}
+            for tp in tips:
+                cc = cat_c.get(tp.get("category"), ACCENT)
+                st.markdown(
+                    f"<div class='hc-ins' style='border-left-color:{cc};margin-bottom:10px'>"
+                    f"<div class='t' style='color:{cc}'>{tp.get('category','')}</div>"
+                    f"<h4>{tp['title']}</h4><p>{tp['tip']}</p></div>", unsafe_allow_html=True)
+        else:
+            st.caption("Couldn't generate tips right now — check the app logs.")
+    else:
+        st.caption("Add an `ANTHROPIC_API_KEY` secret to unlock daily personalized AI coaching.")
+
     st.markdown(
         "<div class='hc-sec'>This week</div><div class='hc-grid'>"
         + tile("Runs", f"{wk_runs}/3", "", "target 3", ACCENT if wk_runs < 3 else "#3DD68C")

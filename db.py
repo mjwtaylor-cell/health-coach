@@ -50,6 +50,8 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS plans (
         date TEXT PRIMARY KEY, training_call TEXT, session TEXT,
         calorie_target REAL, protein_target REAL, rationale TEXT, created_ts TEXT)""",
+    """CREATE TABLE IF NOT EXISTS coach_tips (
+        date TEXT PRIMARY KEY, tips_json TEXT, created_ts TEXT)""",
 ]
 
 
