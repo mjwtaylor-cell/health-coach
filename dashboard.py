@@ -1,7 +1,6 @@
-"""Health Coach dashboard.  Local: .venv/bin/streamlit run dashboard.py
+"""Health Coach — dark, premium dashboard. Local: .venv/bin/streamlit run dashboard.py
 
-When deployed, set the APP_PASSWORD env var to require a login. Left unset
-locally, the login gate is skipped.
+Set APP_PASSWORD (env or st.secrets) to require login; unset = open locally.
 """
 from __future__ import annotations
 
@@ -9,165 +8,237 @@ import datetime as dt
 import os
 
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
+import config
 import insights
 import planner
-from config import DB_PATH
 from db import init_db, query_df, upsert
 
 st.set_page_config(page_title="Health Coach", page_icon="🏃", layout="wide",
-                   initial_sidebar_state="expanded")
-init_db()
+                   initial_sidebar_state="collapsed")
+
+ACCENT = "#FF6A3D"
+MUTED = "#8A8F99"
+GRID = "#23262F"
+CARD = "#16181F"
+CALL = {"hard": "#FF5A4D", "moderate": "#FFA336", "easy": "#3DD68C", "rest": "#4AA8FF"}
 
 
+# ---------------- auth gate ----------------
 def _gate() -> None:
-    """Simple single-user password gate. Active only when APP_PASSWORD is set."""
-    pw = os.getenv("APP_PASSWORD")
-    if not pw:
+    pw = config.secret("APP_PASSWORD")
+    if not pw or st.session_state.get("authed"):
         return
-    if st.session_state.get("authed"):
-        return
-    st.title("🏃 Health Coach")
-    entered = st.text_input("Password", type="password")
+    st.markdown("<div style='height:18vh'></div>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center'>🏃 Health Coach</h1>", unsafe_allow_html=True)
+    c = st.columns([1, 2, 1])[1]
+    entered = c.text_input("Password", type="password", label_visibility="collapsed", placeholder="Password")
     if entered and entered == pw:
         st.session_state["authed"] = True
         st.rerun()
     elif entered:
-        st.error("Incorrect password.")
+        c.error("Incorrect password.")
     st.stop()
 
 
 _gate()
+init_db()
 
-# Cloud: pull fresh data when the app is opened and the cache is stale (>3h).
-# Single-user app → opening it on your phone IS the trigger; no separate scheduler needed.
-if os.getenv("AUTO_REFRESH") == "1":
+if config.secret("AUTO_REFRESH") == "1":
     @st.cache_data(ttl=3 * 3600, show_spinner="Refreshing your latest data…")
     def _auto_pull() -> bool:
         import pipeline
         pipeline.run(days_back=14)
         return True
-
     _auto_pull()
+
+
+# ---------------- styling ----------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+html, body, [class*="css"], .stApp, button, input, textarea { font-family:'Inter',-apple-system,sans-serif; }
+.stApp { background:
+    radial-gradient(1200px 600px at 50% -200px, #1a1410 0%, #0D0E12 55%); }
+#MainMenu, header[data-testid="stHeader"], footer { display:none !important; }
+.block-container { padding:1.1rem 1rem 4rem; max-width:1080px; }
+h1,h2,h3 { font-weight:800 !important; letter-spacing:-0.02em; }
+[data-testid="stMetricValue"] { font-weight:800; }
+
+.hc-hero { background:linear-gradient(135deg,#191b22 0%,#141318 100%);
+    border:1px solid #262932; border-radius:22px; padding:22px 24px; margin-bottom:14px; }
+.hc-badge { display:inline-flex; align-items:center; gap:8px; padding:7px 16px; border-radius:999px;
+    font-weight:800; font-size:.95rem; letter-spacing:.06em; }
+.hc-session { font-size:1.18rem; font-weight:600; color:#F4F5F7; line-height:1.45; margin:14px 0 6px; }
+.hc-why { color:#8A8F99; font-size:.86rem; }
+
+.hc-grid { display:flex; flex-wrap:wrap; gap:12px; margin:4px 0 8px; }
+.hc-tile { flex:1 1 150px; background:#16181F; border:1px solid #23262F; border-radius:16px; padding:14px 16px; }
+.hc-label { font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; color:#8A8F99; font-weight:700; }
+.hc-value { font-size:1.95rem; font-weight:800; color:#ECEDEF; line-height:1.15; margin-top:3px; }
+.hc-unit { font-size:.95rem; font-weight:600; color:#8A8F99; }
+.hc-sub { font-size:.76rem; color:#6f7681; margin-top:2px; }
+
+.hc-sec { font-size:.78rem; letter-spacing:.14em; text-transform:uppercase; color:#8A8F99;
+    font-weight:800; margin:22px 0 8px; }
+.hc-ins { background:#16181F; border:1px solid #23262F; border-left-width:4px; border-radius:14px;
+    padding:14px 16px; height:100%; }
+.hc-ins h4 { margin:6px 0 4px; font-size:1.05rem; font-weight:800; color:#F4F5F7; }
+.hc-ins .t { font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; font-weight:700; }
+.hc-ins p { color:#8A8F99; font-size:.84rem; margin:0; }
+div[data-testid="stDataFrame"] { border-radius:14px; overflow:hidden; }
+.stButton button { border-radius:12px; font-weight:700; border:1px solid #2a2d37; }
+</style>
+""", unsafe_allow_html=True)
 
 
 def q(sql: str) -> pd.DataFrame:
     return query_df(sql)
 
 
-# ---------------- Evening check-in (sidebar; works from phone) ----------------
-with st.sidebar:
-    st.header("🌙 Evening check-in")
-    today_iso = dt.date.today().isoformat()
-    existing = q(f"SELECT * FROM checkins WHERE date='{today_iso}'")
-    if not existing.empty:
-        st.success("Logged for today ✓ (resubmit to update)")
-    with st.form("checkin"):
-        cals = st.number_input("Calories", min_value=0, max_value=8000, step=50, value=None, placeholder="rough estimate")
-        protein = st.number_input("Protein (g)", min_value=0, max_value=400, step=5, value=None, placeholder="grams")
-        alcohol = st.number_input("Alcohol (units)", min_value=0.0, max_value=20.0, step=1.0, value=0.0)
-        hunger = st.slider("Hunger (1=stuffed, 5=ravenous)", 1, 5, 3)
-        notes = st.text_input("Notes", placeholder="stress, soreness, anything")
-        if st.form_submit_button("Save & plan tomorrow", use_container_width=True):
-            upsert("checkins", [{"date": today_iso, "est_calories": cals, "protein_g": protein,
-                                 "alcohol_units": alcohol, "hunger": hunger, "notes": notes}])
-            tomorrow = dt.date.today() + dt.timedelta(days=1)
-            tplan = planner.make_plan(tomorrow)
-            upsert("plans", [tplan])
-            st.success("Saved. Tomorrow:")
-            st.write(f"**{tplan['training_call'].upper()}** — {tplan['session']}")
-            if tplan["calorie_target"]:
-                st.caption(f"Fuel: {tplan['calorie_target']:.0f} kcal / {tplan['protein_target']:.0f} g protein")
+def latest(df: pd.DataFrame, col: str):
+    s = df[col].dropna() if (not df.empty and col in df) else pd.Series(dtype=float)
+    return (s.iloc[-1] if len(s) else None), (round(s.tail(7).mean(), 1) if len(s) else None)
 
 
-# ---------------- Today's plan ----------------
-st.title("🏃 Health Coach")
+def tile(label, value, unit="", sub="", color="#ECEDEF"):
+    val = "—" if value is None else value
+    return (f"<div class='hc-tile'><div class='hc-label'>{label}</div>"
+            f"<div class='hc-value' style='color:{color}'>{val}<span class='hc-unit'> {unit}</span></div>"
+            f"<div class='hc-sub'>{sub}</div></div>")
+
+
+def score_color(v, good, ok):
+    if v is None:
+        return "#ECEDEF"
+    return "#3DD68C" if v >= good else ("#FFA336" if v >= ok else "#FF5A4D")
+
+
+def style_fig(fig, color=ACCENT, height=230):
+    fig.update_layout(height=height, margin=dict(l=6, r=6, t=8, b=6),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color=MUTED, family="Inter", size=11), showlegend=False)
+    fig.update_xaxes(showgrid=False, zeroline=False, title=None)
+    fig.update_yaxes(showgrid=True, gridcolor=GRID, zeroline=False, title=None)
+    return fig
+
+
+def line(df, x, y, color=ACCENT, fill=True, height=230):
+    fig = go.Figure(go.Scatter(
+        x=df[x], y=df[y], mode="lines", line=dict(color=color, width=2.4, shape="spline"),
+        fill="tozeroy" if fill else None, fillcolor="rgba(255,106,61,0.10)" if color == ACCENT else "rgba(255,255,255,0.04)"))
+    return style_fig(fig, color, height)
+
+
+PLOT_CFG = {"displayModeBar": False}
+
+
+# ---------------- data ----------------
 plan = planner.make_plan()
-call_color = {"hard": "🔴", "moderate": "🟠", "easy": "🟢", "rest": "🔵"}.get(plan["training_call"], "⚪")
-
-c1, c2 = st.columns([1, 2])
-with c1:
-    st.subheader("Today")
-    st.metric("Training call", f"{call_color} {plan['training_call'].upper()}")
-    if plan["calorie_target"]:
-        st.metric("Fuel target", f"{plan['calorie_target']:.0f} kcal")
-        st.metric("Protein", f"{plan['protein_target']:.0f} g")
-with c2:
-    st.subheader("Session")
-    st.info(plan["session"])
-    st.caption(plan["rationale"])
-
-st.divider()
-
-# ---------------- Recovery ----------------
-st.subheader("Recovery")
+zones = planner.hr_zones()
 rec = q("SELECT date, score FROM readiness WHERE source='oura' ORDER BY date")
-# True RHR (lowest nightly HR) and HRV come from the sleep record, not readiness sub-scores.
 slp = q("SELECT date, total_min, hrv_avg, hr_low FROM sleep WHERE source='oura' ORDER BY date")
+if not slp.empty:
+    slp["hours"] = slp["total_min"] / 60
 
+r_now, r_avg = latest(rec, "score")
+h_now, h_avg = latest(slp, "hours")
+v_now, v_avg = latest(slp, "hrv_avg")
+rhr_now, rhr_avg = latest(slp, "hr_low")
+
+
+# ---------------- check-in modal ----------------
+@st.dialog("🌙 Evening check-in")
+def checkin_dialog():
+    today_iso = dt.date.today().isoformat()
+    if not q(f"SELECT 1 FROM checkins WHERE date='{today_iso}'").empty:
+        st.caption("Already logged today — resubmit to update.")
+    cals = st.number_input("Calories", 0, 8000, step=50, value=None, placeholder="rough estimate")
+    protein = st.number_input("Protein (g)", 0, 400, step=5, value=None, placeholder="grams")
+    alcohol = st.number_input("Alcohol (units)", 0.0, 20.0, step=1.0, value=0.0)
+    hunger = st.slider("Hunger", 1, 5, 3, help="1 = stuffed, 5 = ravenous")
+    notes = st.text_input("Notes", placeholder="stress, soreness, anything")
+    if st.button("Save & plan tomorrow", use_container_width=True, type="primary"):
+        upsert("checkins", [{"date": today_iso, "est_calories": cals, "protein_g": protein,
+                             "alcohol_units": alcohol, "hunger": hunger, "notes": notes}])
+        tplan = planner.make_plan(dt.date.today() + dt.timedelta(days=1))
+        upsert("plans", [tplan])
+        st.success(f"Saved. Tomorrow: {tplan['training_call'].upper()} — {tplan['session']}")
+
+
+# ---------------- header ----------------
+hc, hb = st.columns([3, 1])
+hc.markdown(f"<h1 style='margin-bottom:0'>🏃 Health Coach</h1>"
+            f"<div style='color:{MUTED};font-size:.9rem'>{dt.date.today():%A, %B %-d}</div>",
+            unsafe_allow_html=True)
+hb.write("")
+if hb.button("＋ Check-in", use_container_width=True):
+    checkin_dialog()
+
+# ---------------- today hero ----------------
+c = plan["training_call"]
+badge_c = CALL.get(c, ACCENT)
+fuel = (f"&nbsp;·&nbsp; <b style='color:{ACCENT}'>{plan['calorie_target']:.0f}</b> kcal &nbsp; "
+        f"<b style='color:{ACCENT}'>{plan['protein_target']:.0f}</b> g protein") if plan["calorie_target"] else ""
+st.markdown(
+    f"<div class='hc-hero'>"
+    f"<span class='hc-label'>Today's call</span> {fuel}"
+    f"<div style='margin:8px 0'><span class='hc-badge' style='background:{badge_c}1f;color:{badge_c};border:1px solid {badge_c}55'>"
+    f"● {c.upper()}</span></div>"
+    f"<div class='hc-session'>{plan['session']}</div>"
+    f"<div class='hc-why'>{plan['rationale']}</div></div>",
+    unsafe_allow_html=True)
+
+# ---------------- quick stats ----------------
+st.markdown(
+    "<div class='hc-grid'>"
+    + tile("Readiness", None if r_now is None else round(r_now), "", f"7-day avg {r_avg}" if r_avg else "—", score_color(r_now, 80, 65))
+    + tile("Sleep", None if h_now is None else round(h_now, 1), "h", f"7-day avg {h_avg} h" if h_avg else "—", score_color(h_now, 7.5, 6.5))
+    + tile("HRV", None if v_now is None else round(v_now), "ms", f"7-day avg {round(v_avg) if v_avg else '—'} ms")
+    + tile("Resting HR", None if rhr_now is None else round(rhr_now), "bpm", f"7-day avg {round(rhr_avg) if rhr_avg else '—'} bpm")
+    + "</div>", unsafe_allow_html=True)
+
+# ---------------- recovery ----------------
 if not rec.empty:
-    r1 = st.columns(2)
-    r1[0].plotly_chart(px.line(rec, x="date", y="score", title="Oura readiness", markers=True, range_y=[0, 100]), use_container_width=True)
+    st.markdown("<div class='hc-sec'>Recovery</div>", unsafe_allow_html=True)
+    a, b = st.columns(2)
+    fig = line(rec, "date", "score"); fig.update_yaxes(range=[0, 100])
+    a.markdown("<div class='hc-label'>Readiness</div>", unsafe_allow_html=True)
+    a.plotly_chart(fig, use_container_width=True, config=PLOT_CFG)
     if not slp.empty:
-        slp["hours"] = slp["total_min"] / 60
-        r1[1].plotly_chart(px.bar(slp, x="date", y="hours", title="Sleep (h)"), use_container_width=True)
-        r2 = st.columns(2)
-        r2[0].plotly_chart(px.line(slp, x="date", y="hrv_avg", title="HRV (ms)", markers=True), use_container_width=True)
-        r2[1].plotly_chart(px.line(slp, x="date", y="hr_low", title="Resting HR (bpm)", markers=True), use_container_width=True)
-else:
-    st.warning("No recovery data yet. Add your Oura token to `.env` and run `python pipeline.py`.")
+        b.markdown("<div class='hc-label'>Sleep (hours)</div>", unsafe_allow_html=True)
+        bar = go.Figure(go.Bar(x=slp["date"], y=slp["hours"], marker_color=ACCENT, marker_line_width=0))
+        b.plotly_chart(style_fig(bar), use_container_width=True, config=PLOT_CFG)
+        a2, b2 = st.columns(2)
+        a2.markdown("<div class='hc-label'>HRV (ms)</div>", unsafe_allow_html=True)
+        a2.plotly_chart(line(slp, "date", "hrv_avg", "#4AA8FF", fill=False), use_container_width=True, config=PLOT_CFG)
+        b2.markdown("<div class='hc-label'>Resting HR (bpm)</div>", unsafe_allow_html=True)
+        b2.plotly_chart(line(slp, "date", "hr_low", "#3DD68C", fill=False), use_container_width=True, config=PLOT_CFG)
 
-st.divider()
-
-# ---------------- Training load ----------------
-st.subheader("Training load")
-wk = q("SELECT date, type, source, duration_min, distance_km, active_kcal FROM workouts ORDER BY date DESC LIMIT 30")
+# ---------------- training load ----------------
+wk = q("SELECT date, type, source, duration_min, distance_km, hr_avg FROM workouts ORDER BY date DESC LIMIT 20")
+st.markdown("<div class='hc-sec'>Training load</div>", unsafe_allow_html=True)
+runs_done = planner._runs_this_week()
+st.markdown("<div class='hc-grid'>"
+            + tile("Runs this week", f"{runs_done} / 3", "", "target 3", ACCENT if runs_done < 3 else "#3DD68C")
+            + (tile("Last 20 sessions", len(wk), "", "across all sources") if not wk.empty else "")
+            + "</div>", unsafe_allow_html=True)
 if not wk.empty:
-    runs = (dt.date.today() - dt.timedelta(days=dt.date.today().weekday())).isoformat()
-    n_runs = wk[(wk["date"] >= runs) & (wk["type"].str.contains("run", case=False, na=False))].shape[0]
-    st.metric("Runs this week", f"{n_runs} / 3")
-    st.dataframe(wk, use_container_width=True, hide_index=True)
-else:
-    st.caption("No workouts logged yet.")
+    st.dataframe(wk, use_container_width=True, hide_index=True,
+                 column_config={"duration_min": "min", "distance_km": "km", "hr_avg": "avg HR"})
 
-st.divider()
-
-# ---------------- Body & nutrition ----------------
-left, right = st.columns(2)
-with left:
-    st.subheader("Body weight")
-    body = q("SELECT date, weight_kg FROM body WHERE weight_kg IS NOT NULL ORDER BY date")
-    if not body.empty:
-        body["trend"] = body["weight_kg"].rolling(7, min_periods=1).mean()
-        st.plotly_chart(px.line(body, x="date", y=["weight_kg", "trend"], title="Weight + 7d trend"), use_container_width=True)
-    else:
-        st.caption("No weight data yet (smart scale via Apple Health, or log manually).")
-with right:
-    st.subheader("Nutrition check-ins")
-    ci = q("SELECT date, est_calories, protein_g, alcohol_units, hunger FROM checkins ORDER BY date DESC LIMIT 14")
-    if not ci.empty:
-        st.dataframe(ci, use_container_width=True, hide_index=True)
-    else:
-        st.caption("Run `python checkin.py` each evening to log intake.")
-
-st.divider()
-
-# ---------------- Weekly insights ----------------
-st.subheader("📊 Weekly insights")
-icons = {"good": "✅", "warn": "⚠️", "info": "ℹ️"}
+# ---------------- insights ----------------
+st.markdown("<div class='hc-sec'>Weekly insights</div>", unsafe_allow_html=True)
+tone_c = {"good": "#3DD68C", "warn": "#FFA336", "info": "#4AA8FF"}
 cards = insights.compute()
-if cards:
-    for row_start in range(0, len(cards), 2):
-        cols = st.columns(2)
-        for col, card in zip(cols, cards[row_start:row_start + 2]):
-            with col:
-                with st.container(border=True):
-                    st.markdown(f"**{icons.get(card['tone'],'')} {card['title']}**")
-                    st.markdown(f"#### {card['headline']}")
-                    st.caption(card["detail"])
-else:
-    st.caption("Not enough data for insights yet — they populate as history grows.")
-
-st.caption(f"DB: {DB_PATH}")
+for i in range(0, len(cards), 2):
+    cols = st.columns(2)
+    for col, card in zip(cols, cards[i:i + 2]):
+        cc = tone_c.get(card["tone"], MUTED)
+        col.markdown(
+            f"<div class='hc-ins' style='border-left-color:{cc}'>"
+            f"<div class='t' style='color:{cc}'>{card['title']}</div>"
+            f"<h4>{card['headline']}</h4><p>{card['detail']}</p></div>",
+            unsafe_allow_html=True)
