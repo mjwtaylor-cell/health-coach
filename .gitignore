@@ -5,3 +5,11 @@ __pycache__/
 data/*.db
 checkins/*.json
 .DS_Store
+node_modules/
+.env.example
+!.env.example
+dist/
+build/
+*.log
+.next/
+.cache/
